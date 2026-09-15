@@ -1,13 +1,11 @@
 # =========================
 # 构建阶段（轻量化：仅文档解析 + 图片提取，无 OCR/VLM）
 # =========================
-FROM python:3.10.18-bookworm AS builder
+FROM harbor.gbim.vip/dockerio/python:3.10.18-bookworm AS builder
 
-ARG APT_MIRROR=""
-RUN if [ -n "$APT_MIRROR" ]; then \
-        sed -i "s@http://deb.debian.org@${APT_MIRROR}@g" /etc/apt/sources.list.d/debian.sources && \
-        sed -i "s@http://security.debian.org@${APT_MIRROR}@g" /etc/apt/sources.list.d/debian.sources; \
-    fi
+ARG APT_MIRROR="http://mirrors.aliyun.com"
+RUN sed -i "s@http://deb.debian.org@${APT_MIRROR}@g" /etc/apt/sources.list.d/debian.sources && \
+    sed -i "s@http://security.debian.org@${APT_MIRROR}@g" /etc/apt/sources.list.d/debian.sources
 
 WORKDIR /app
 
@@ -56,16 +54,20 @@ RUN if [ -z "$TARGETARCH" ]; then \
         chmod +x /usr/local/bin/protoc && \
         rm -f /app/${PROTOC_PACKAGE}; \
     else \
-        echo "未发现本地protoc安装包，将进行在线安装"; \
-        curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v3.19.4/${PROTOC_PACKAGE} && \
+        echo "未发现本地protoc安装包，将进行在线安装（国内镜像）"; \
+        curl -fsSLO https://ghfast.top/https://github.com/protocolbuffers/protobuf/releases/download/v3.19.4/${PROTOC_PACKAGE} || \
+        curl -fsSLO https://github.com/protocolbuffers/protobuf/releases/download/v3.19.4/${PROTOC_PACKAGE} && \
         unzip -o ${PROTOC_PACKAGE} -d /usr/local && \
         chmod +x /usr/local/bin/protoc && \
         rm -f ${PROTOC_PACKAGE}; \
     fi
 
 # 复制依赖文件
+# 注意：不能在 `uv sync` 上用 --index-url / UV_INDEX_URL 覆盖索引——索引属于
+# 解析输入，uv 会据此判定 uv.lock 过期，与 --locked 冲突并直接报错。
+# 这里保持锁文件记录的默认索引，pip 装 uv 自身仍走国内 PyPI 镜像。
 COPY docreader/pyproject.toml docreader/uv.lock ./
-RUN pip install uv --break-system-packages && \
+RUN pip install uv --break-system-packages -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com && \
     python -m uv sync --locked --no-dev
 
 # 复制源代码和生成脚本
@@ -79,13 +81,11 @@ RUN chmod +x docreader/scripts/generate_proto.sh && \
 # =========================
 # 运行阶段（轻量化）
 # =========================
-FROM python:3.10.18-bookworm AS runner
+FROM harbor.gbim.vip/dockerio/python:3.10.18-bookworm AS runner
 
-ARG APT_MIRROR=""
-RUN if [ -n "$APT_MIRROR" ]; then \
-        sed -i "s@http://deb.debian.org@${APT_MIRROR}@g" /etc/apt/sources.list.d/debian.sources && \
-        sed -i "s@http://security.debian.org@${APT_MIRROR}@g" /etc/apt/sources.list.d/debian.sources; \
-    fi
+ARG APT_MIRROR="http://mirrors.aliyun.com"
+RUN sed -i "s@http://deb.debian.org@${APT_MIRROR}@g" /etc/apt/sources.list.d/debian.sources && \
+    sed -i "s@http://security.debian.org@${APT_MIRROR}@g" /etc/apt/sources.list.d/debian.sources
 
 WORKDIR /app
 
@@ -132,6 +132,7 @@ RUN if [ -z "$TARGETARCH" ]; then \
         "arm") ARCH="arm" ;; \
         *) echo "Unsupported architecture: $TARGETARCH" && exit 1 ;; \
     esac && \
+    wget -qO/bin/grpc_health_probe https://ghfast.top/https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/${GRPC_HEALTH_PROBE_VERSION}/grpc_health_probe-linux-${ARCH} || \
     wget -qO/bin/grpc_health_probe https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/${GRPC_HEALTH_PROBE_VERSION}/grpc_health_probe-linux-${ARCH} && \
     chmod +x /bin/grpc_health_probe
 
@@ -142,7 +143,8 @@ ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# 安装 Playwright 浏览器（网页解析）
+# 安装 Playwright 浏览器（网页解析），使用国内镜像下载
+ENV PLAYWRIGHT_DOWNLOAD_HOST=https://registry.npmmirror.com/-/binary/playwright
 RUN python -m playwright install webkit
 RUN python -m playwright install-deps webkit
 

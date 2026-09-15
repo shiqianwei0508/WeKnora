@@ -1,8 +1,10 @@
 # Build the paired extension and fetch the checksum-pinned native daemon.
 # Node runs on the builder architecture; only bsk targets the runtime image.
-FROM --platform=$BUILDPLATFORM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS browserskill
+FROM --platform=$BUILDPLATFORM harbor.gbim.vip/dockerio/node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS browserskill
 WORKDIR /build
-RUN apt-get update && \
+# 使用国内 Debian 镜像源（HTTP，镜像内尚无 ca-certificates 时 HTTPS 会失败）
+RUN sed -i "s@http://deb.debian.org@http://mirrors.aliyun.com@g" /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && \
     apt-get install -y --no-install-recommends git python3 ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 COPY scripts/build_browserskill.sh scripts/browserskill-release.json ./scripts/
@@ -12,7 +14,7 @@ ARG TARGETARCH
 RUN bash scripts/build_browserskill.sh /opt/weknora/browserskill "${TARGETOS}/${TARGETARCH}"
 
 # Build stage
-FROM golang:1.26-bookworm AS builder
+FROM harbor.gbim.vip/dockerio/golang:1.26-bookworm AS builder
 
 WORKDIR /app
 
@@ -27,10 +29,8 @@ ENV GOPRIVATE=${GOPRIVATE_ARG}
 ENV GOPROXY=${GOPROXY_ARG}
 ENV GOSUMDB=${GOSUMDB_ARG}
 
-# Install dependencies
-RUN if [ -n "$APK_MIRROR_ARG" ]; then \
-        sed -i "s@deb.debian.org@${APK_MIRROR_ARG}@g" /etc/apt/sources.list.d/debian.sources; \
-    fi && \
+# Install dependencies（无条件使用国内 Debian 源，HTTP）
+RUN sed -i "s@http://deb.debian.org@${APK_MIRROR_ARG:-http://mirrors.aliyun.com}@g" /etc/apt/sources.list.d/debian.sources && \
     apt-get update && \
     apt-get install -y git build-essential libsqlite3-dev curl
 
@@ -64,13 +64,25 @@ ENV GO_VERSION=${GO_VERSION_ARG}
 # engine; pass WITH_ANYDOC=0 to skip the Rust toolchain (~few minutes and
 # ~1 GB of build-stage layers).
 ARG WITH_ANYDOC=1
+ARG RUSTUP_DIST_SERVER_ARG
+ARG RUSTUP_UPDATE_ROOT_ARG
 ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
 ENV PATH=/usr/local/cargo/bin:$PATH
+ENV RUSTUP_DIST_SERVER=${RUSTUP_DIST_SERVER_ARG:-https://mirrors.ustc.edu.cn/rust-static}
+ENV RUSTUP_UPDATE_ROOT=${RUSTUP_UPDATE_ROOT_ARG:-https://mirrors.ustc.edu.cn/rust-static/rustup}
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     if [ "$WITH_ANYDOC" = "1" ]; then \
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-            | sh -s -- -y --profile minimal --default-toolchain stable && \
+        mkdir -p "$CARGO_HOME" && \
+        printf '%s\n' \
+            '[source.crates-io]' \
+            'replace-with = "tuna"' \
+            '[source.tuna]' \
+            'registry = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"' \
+            > "$CARGO_HOME/config.toml" && \
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh && \
+        sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain stable && \
+        rm -f /tmp/rustup-init.sh && \
         ./scripts/build-anydoc-lib.sh; \
     fi
 
@@ -84,7 +96,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 RUN --mount=type=cache,target=/go/pkg/mod cp -r /go/pkg/mod/github.com/yanyiwu/ /app/yanyiwu/
 
 # Final stage
-FROM debian:12.12-slim
+FROM harbor.gbim.vip/dockerio/debian:12.12-slim
 
 WORKDIR /app
 
@@ -98,16 +110,14 @@ COPY --from=browserskill /opt/weknora/browserskill /opt/weknora/browserskill
 # Create a non-root user first
 RUN useradd -m -s /bin/bash appuser
 
-# First, install ca-certificates without mirror to ensure HTTPS works
-RUN apt-get update && \
+# 统一切换为国内 Debian 源（HTTP，先装 ca-certificates 再走 HTTPS 亦可）
+RUN sed -i "s@http://deb.debian.org@${APK_MIRROR_ARG:-http://mirrors.aliyun.com}@g" /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-# Then switch to mirror if specified and install other packages
-RUN if [ -n "$APK_MIRROR_ARG" ]; then \
-        sed -i "s@deb.debian.org@${APK_MIRROR_ARG}@g" /etc/apt/sources.list.d/debian.sources; \
-    fi && \
-    apt-get update && \
+# 安装其余软件包；pip 使用国内 PyPI 镜像
+RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential postgresql-client default-mysql-client tzdata sed curl bash vim wget \
         libsqlite3-0 \
@@ -115,6 +125,8 @@ RUN if [ -n "$APK_MIRROR_ARG" ]; then \
         nodejs npm \
         gosu \
         ffmpeg && \
+    python3 -m pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
+    python3 -m pip config set global.trusted-host mirrors.aliyun.com && \
     python3 -m pip install --break-system-packages --upgrade pip setuptools wheel && \
     mkdir -p /home/appuser/.local/bin && \
     curl -LsSf https://astral.sh/uv/install.sh | CARGO_HOME=/home/appuser/.cargo UV_INSTALL_DIR=/home/appuser/.local/bin sh && \

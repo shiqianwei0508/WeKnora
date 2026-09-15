@@ -26,16 +26,16 @@
 ARG TARGETPLATFORM=linux/amd64
 
 # Stage 1: Get Node.js binaries
-FROM --platform=$TARGETPLATFORM node:20-slim AS node-base
+FROM --platform=$TARGETPLATFORM harbor.gbim.vip/dockerio/node:20-slim AS node-base
 
-FROM --platform=$TARGETPLATFORM ghcr.io/astral-sh/uv:0.12.4 AS uv-base
+FROM --platform=$TARGETPLATFORM harbor.gbim.vip/ghcr/astral-sh/uv:0.12.4 AS uv-base
 
 # Stage 2: Runtime image
 #
 # 3.12 is the floor because skill sources commonly use PEP 701 nested quotes
 # in f-strings (f"x={d["k"]}"). Install-time ast.parse runs this interpreter;
 # 3.11 rejects that syntax and the whole skill install fails.
-FROM --platform=$TARGETPLATFORM python:3.12-slim AS runtime
+FROM --platform=$TARGETPLATFORM harbor.gbim.vip/dockerio/python:3.12-slim AS runtime
 
 # Copy Node.js from node image (avoids NodeSource install overhead)
 COPY --from=node-base /usr/local/bin/node /usr/local/bin/
@@ -49,15 +49,17 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
 COPY --from=uv-base /uv /usr/local/bin/uv
 RUN ln -s /usr/local/bin/uv /usr/local/bin/uvx
 
-# Node package manager: pnpm
-RUN npm install -g pnpm
+# Node package manager: pnpm（使用国内 npm 镜像）
+RUN npm install -g pnpm --registry=https://registry.npmmirror.com
 
 # Install minimal CLI tools (bash/grep/sed/coreutils/findutils already in slim
 # image). `file` is not in slim; models reach for it after a script-type error.
 # curl is not optional: the sandbox connectivity check probes egress with it,
 # and skills that fetch a URL expect it to be there. The compression tools are
 # here because skill bundles and their assets arrive archived.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN sed -i "s@http://deb.debian.org@http://mirrors.aliyun.com@g" /etc/apt/sources.list.d/debian.sources && \
+    sed -i "s@http://security.debian.org@http://mirrors.aliyun.com@g" /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && apt-get install -y --no-install-recommends \
     jq \
     curl \
     ca-certificates \
@@ -109,7 +111,7 @@ USER root
 # This target is linux/amd64 only: cubesandbox-base publishes no arm64 image,
 # which matches Cube itself (PVM is x86_64-only). Hard-pin the FROM so a
 # forgotten --platform cannot copy an amd64 envd onto an arm64 runtime.
-FROM --platform=linux/amd64 ghcr.io/tencentcloud/cubesandbox-base:2026.16 AS cube-base
+FROM --platform=linux/amd64 harbor.gbim.vip/ghcr/tencentcloud/cubesandbox-base:2026.16 AS cube-base
 
 FROM runtime AS cube
 
@@ -149,7 +151,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN sed -i "s@http://deb.debian.org@http://mirrors.aliyun.com@g" /etc/apt/sources.list.d/debian.sources && \
+    sed -i "s@http://security.debian.org@http://mirrors.aliyun.com@g" /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && apt-get install -y --no-install-recommends \
     procps \
     util-linux \
     xvfb \

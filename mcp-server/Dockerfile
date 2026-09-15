@@ -1,6 +1,13 @@
-FROM python:3.11-slim
+FROM harbor.gbim.vip/dockerio/python:3.11-slim
 
 WORKDIR /app
+
+# 使用国内 Debian 源与 PyPI 镜像
+RUN sed -i "s@http://deb.debian.org@http://mirrors.aliyun.com@g" /etc/apt/sources.list.d/debian.sources && \
+    sed -i "s@http://security.debian.org@http://mirrors.aliyun.com@g" /etc/apt/sources.list.d/debian.sources && \
+    pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
+    pip config set global.trusted-host mirrors.aliyun.com
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

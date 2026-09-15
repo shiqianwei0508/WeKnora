@@ -39,6 +39,9 @@ data/weknora.db-wal
 data/weknora.db-shm
 skills-lock.json
 
+# docker-compose 本地持久化目录（bind mount 落地数据，勿入库）
+/persistData/
+
 web/
 
 **/__pycache__

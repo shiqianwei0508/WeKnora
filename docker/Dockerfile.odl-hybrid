@@ -5,7 +5,11 @@
 # still runs without EasyOCR (avoids libGL + heavy OCR stack in slim images).
 # For scanned PDFs use builtin docreader OCR, MinerU, or override with
 # ODL_HYBRID_EXTRA_ARGS="--force-ocr" (requires extra system/Python deps).
-FROM python:3.10.18-bookworm
+FROM harbor.gbim.vip/dockerio/python:3.10.18-bookworm
+
+# 使用国内 Debian 源与 PyPI 镜像
+RUN sed -i "s@http://deb.debian.org@http://mirrors.aliyun.com@g" /etc/apt/sources.list.d/debian.sources && \
+    sed -i "s@http://security.debian.org@http://mirrors.aliyun.com@g" /etc/apt/sources.list.d/debian.sources
 
 # Docling table/layout models import cv2 (OpenCV), which needs libGL at runtime
 # even when hybrid runs with --no-ocr.
@@ -17,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsm6 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir "opendataloader-pdf[hybrid]>=2.4.7"
+RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com "opendataloader-pdf[hybrid]>=2.4.7"
 
 EXPOSE 5002
 
