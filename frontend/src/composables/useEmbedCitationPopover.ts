@@ -9,6 +9,8 @@ import { useChatReferencesDrawer } from '@/composables/useChatReferencesDrawer'
 
 type EmbedCitationPopoverOptions = {
   getKnowledgeReferences?: () => CitationKnowledgeRef[] | null | undefined
+  /** Anonymous visitor id, so chunk lookups bill the visitor's own rate bucket. */
+  visitorId?: MaybeRef<string>
 }
 
 type FloatState = {
@@ -88,7 +90,12 @@ export function useEmbedCitationPopover(
     float.value.error = ''
     float.value.content = ''
     try {
-      const res = await getEmbedChunkById(unref(channelId), unref(token), chunkId)
+      const res = await getEmbedChunkById(
+        unref(channelId),
+        unref(token),
+        chunkId,
+        options?.visitorId ? unref(options.visitorId) : undefined,
+      )
       const content = String(res?.data?.content || '').trim()
       setCitationChunkCache(scope, chunkId, { content })
       float.value.content = content

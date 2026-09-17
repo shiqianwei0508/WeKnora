@@ -41,6 +41,7 @@
         :allow-file-upload="config.allow_file_upload === true"
         :agent-image-upload-enabled="config.agent_image_upload_enabled === true"
         :use-session-header-title="useSessionHeaderTitle"
+        :has-webhook="config.has_webhook === true"
         :host-context="hostContext"
         @session-title="sessionTitle = $event"
         @messages-state="chatHasMessages = $event"

@@ -1088,6 +1088,7 @@ const {
   getKnowledgeReferences: () => props.session?.knowledge_references,
   embedChannelId: () => (props.embeddedMode ? props.embedChannelId : undefined),
   embedToken: () => (props.embeddedMode ? props.embedToken : undefined),
+  embedVisitorId: () => (props.embeddedMode ? props.embedVisitorId : undefined),
   sessionId: () => props.sessionId,
 });
 

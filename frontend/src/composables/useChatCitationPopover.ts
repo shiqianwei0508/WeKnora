@@ -29,6 +29,8 @@ export type ChatCitationPopoverOptions = {
   getKnowledgeReferences?: () => CitationKnowledgeRef[] | null | undefined
   embedChannelId?: () => string | undefined
   embedToken?: () => string | undefined
+  /** Anonymous visitor id for embedded callers; bills the visitor's own bucket. */
+  embedVisitorId?: () => string | undefined
   sessionId?: () => string | undefined
 }
 
@@ -83,7 +85,7 @@ export function useChatCitationPopover(
     const channelId = options?.embedChannelId?.()
     const token = options?.embedToken?.()
     if (channelId && token) {
-      return getEmbedChunkById(channelId, token, chunkId)
+      return getEmbedChunkById(channelId, token, chunkId, options?.embedVisitorId?.())
     }
     return getChunkByIdOnly(chunkId)
   }

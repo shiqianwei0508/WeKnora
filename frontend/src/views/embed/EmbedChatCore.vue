@@ -155,6 +155,7 @@ const props = defineProps<{
   allowFileUpload?: boolean
   agentImageUploadEnabled?: boolean
   useSessionHeaderTitle?: boolean
+  hasWebhook?: boolean
   hostContext?: Record<string, unknown>
 }>()
 
@@ -283,6 +284,7 @@ const {
   kbIds: props.kbIds,
   allowWebSearch: props.allowWebSearch,
   allowFileUpload: props.allowFileUpload,
+  hasWebhook: toRef(props, 'hasWebhook'),
   hostContext: hostContextRef,
   onMessagesChange: (has) => emit('messages-state', has),
   onSessionTitle: (title) => {
@@ -321,7 +323,7 @@ const fetchSuggestedQuestions = async () => {
   }
   suggestedLoading.value = true
   try {
-    const res = await getEmbedSuggestedQuestions(props.channelId, props.token)
+    const res = await getEmbedSuggestedQuestions(props.channelId, props.token, undefined, props.visitorId)
     suggestedQuestions.value = res?.data?.questions || []
   } catch {
     suggestedQuestions.value = []

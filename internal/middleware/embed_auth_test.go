@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Tencent/WeKnora/internal/application/service"
@@ -208,6 +209,118 @@ func TestEmbedGlobalPerMinute(t *testing.T) {
 				t.Fatalf("embedGlobalPerMinute(%d) = %d, want %d", tt.perIP, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestEmbedRateKeyVisitorMarker(t *testing.T) {
+	if embedVisitorKeyMarker == "" || embedEventsKeyMarker == "" {
+		t.Fatal("rate-limit key markers must not be empty")
+	}
+	if embedEventsFullPath == "" {
+		t.Fatal("events route pattern must be declared")
+	}
+}
+
+func TestEmbedRateKeyUsesVisitorWhenValid(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const channelID = "ch-rate-key"
+
+	// A registered route is required for FullPath() to report a template; the
+	// patterns mirror the real embed router (see routes_agent.go).
+	r := gin.New()
+	chatKeys := []string{}
+	eventsKeys := []string{}
+	r.POST("/api/v1/embed/:channel_id/knowledge-chat/:session_id", func(c *gin.Context) {
+		chatKeys = append(chatKeys, embedRateKey(channelID, c))
+		c.Status(http.StatusOK)
+	})
+	r.POST("/api/v1/embed/:channel_id/sessions/:session_id/events", func(c *gin.Context) {
+		eventsKeys = append(eventsKeys, embedRateKey(channelID, c))
+		c.Status(http.StatusOK)
+	})
+
+	serve := func(path string, headers map[string]string) {
+		req := httptest.NewRequest(http.MethodPost, path, nil)
+		req.RemoteAddr = "203.0.113.7:1234"
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("POST %s status = %d", path, w.Code)
+		}
+	}
+
+	chatPath := "/api/v1/embed/" + channelID + "/knowledge-chat/sess-1"
+	serve(chatPath, map[string]string{types.EmbedVisitorHeader: "visitor-a"})
+	serve(chatPath, nil)
+	serve(chatPath, map[string]string{types.EmbedVisitorHeader: strings.Repeat("x", 129)})
+	serve("/api/v1/embed/"+channelID+"/sessions/sess-1/events",
+		map[string]string{types.EmbedVisitorHeader: "visitor-b"})
+
+	if len(chatKeys) != 3 || len(eventsKeys) != 1 {
+		t.Fatalf("unexpected handler invocations: chat=%d events=%d", len(chatKeys), len(eventsKeys))
+	}
+
+	// A valid visitor header moves the chat bucket off the shared IP bucket.
+	if want := channelID + ":v:visitor-a"; chatKeys[0] != want {
+		t.Fatalf("chat key with visitor = %q, want %q", chatKeys[0], want)
+	}
+	// Without a visitor header the legacy per-IP bucket must still be used, and
+	// an over-long visitor id must be rejected onto the very same bucket, so
+	// omitting or corrupting the header cannot buy a larger budget.
+	if !strings.HasPrefix(chatKeys[1], channelID+":") || strings.Contains(chatKeys[1], ":v:") {
+		t.Fatalf("missing visitor header should fall back to the IP bucket, got %q", chatKeys[1])
+	}
+	if strings.Contains(chatKeys[2], ":v:") {
+		t.Fatalf("invalid visitor header must fall back to the IP bucket, got %q", chatKeys[2])
+	}
+	if chatKeys[1] != chatKeys[2] {
+		t.Fatalf("invalid and missing visitor headers must share the IP bucket: %q vs %q", chatKeys[1], chatKeys[2])
+	}
+	// The relay owns its own namespace instead of sharing the chat bucket.
+	if want := channelID + ":events:" + channelID + ":v:visitor-b"; eventsKeys[0] != want {
+		t.Fatalf("events key = %q, want %q", eventsKeys[0], want)
+	}
+	if eventsKeys[0] == chatKeys[0] {
+		t.Fatal("events relay must not share the chat bucket")
+	}
+}
+
+func TestIsEmbedEventsRequestIgnoresSiblingRoutes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	r := gin.New()
+	seen := map[string]bool{}
+	record := func(name string) gin.HandlerFunc {
+		return func(c *gin.Context) {
+			seen[name] = isEmbedEventsRequest(c)
+			c.Status(http.StatusOK)
+		}
+	}
+	r.POST("/api/v1/embed/:channel_id/sessions/:session_id/events", record("events"))
+	r.POST("/api/v1/embed/:channel_id/sessions/:session_id/suggestion-events", record("suggestion-events"))
+	r.POST("/api/v1/embed/:channel_id/sessions/:session_id/stop", record("stop"))
+
+	for _, path := range []string{
+		"/api/v1/embed/ch/sessions/s1/events",
+		"/api/v1/embed/ch/sessions/s1/suggestion-events",
+		"/api/v1/embed/ch/sessions/s1/stop",
+	} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("POST %s status = %d", path, w.Code)
+		}
+	}
+
+	if !seen["events"] {
+		t.Fatal("events route should be detected as the webhook relay")
+	}
+	if seen["suggestion-events"] || seen["stop"] {
+		t.Fatal("sibling session routes must not share the events bucket")
 	}
 }
 

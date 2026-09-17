@@ -32,6 +32,8 @@ export function useEmbedChatSession(options: {
   kbIds: string[]
   allowWebSearch?: boolean
   allowFileUpload?: boolean
+  /** Ref<boolean> telling whether the channel has a webhook; falsy skips relay calls. */
+  hasWebhook?: Ref<boolean>
   hostContext?: Ref<Record<string, unknown>>
   onMessagesChange?: (has: boolean) => void
   onSessionTitle?: (title: string) => void
@@ -105,16 +107,25 @@ export function useEmbedChatSession(options: {
     }
   }
 
-  const notifyEmbedReceived = (content: string) => {
-    if (!content?.trim()) return
-    postEmbedMessageReceived(options.channelId, options.sessionId.value, content)
+  // Relay calls are fire-and-forget, but they still consume the channel's
+  // rate-limit quota on the server. Channels without a webhook have nothing to
+  // deliver, so skip the round trip entirely.
+  const relayIfWebhook = (body: { type: 'message_sent' | 'message_received'; query?: string; content?: string }) => {
+    if (options.hasWebhook && !options.hasWebhook.value) return
     relayEmbedWebhookEvent(
       options.channelId,
       options.token,
       options.sessionId.value,
       options.sessionSig.value,
-      { type: 'message_received', content },
+      body,
+      options.visitorId.value,
     )
+  }
+
+  const notifyEmbedReceived = (content: string) => {
+    if (!content?.trim()) return
+    postEmbedMessageReceived(options.channelId, options.sessionId.value, content)
+    relayIfWebhook({ type: 'message_received', content })
   }
 
   const {
@@ -196,6 +207,7 @@ export function useEmbedChatSession(options: {
       data.limit,
       data.created_at || undefined,
       options.sessionSig.value,
+      options.visitorId.value,
     )
       .then(async (res) => {
         const batch = res?.data as Record<string, unknown>[] | undefined
@@ -237,6 +249,7 @@ export function useEmbedChatSession(options: {
         options.sessionId.value,
         messageId,
         options.sessionSig.value,
+        options.visitorId.value,
       ).catch((err) => console.error('Failed to stop embed generation:', err))
     }
     loading.value = false
@@ -289,13 +302,7 @@ export function useEmbedChatSession(options: {
       created_at: new Date().toISOString(),
     })
     postEmbedMessageSent(options.channelId, options.sessionId.value, value)
-    relayEmbedWebhookEvent(
-      options.channelId,
-      options.token,
-      options.sessionId.value,
-      options.sessionSig.value,
-      { type: 'message_sent', query: value },
-    )
+    relayIfWebhook({ type: 'message_sent', query: value })
     userHasScrolledUp.value = false
     scrollToBottom(true)
 

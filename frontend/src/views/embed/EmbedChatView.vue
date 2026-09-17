@@ -14,6 +14,7 @@
     :allow-file-upload="allowFileUpload"
     :agent-image-upload-enabled="agentImageUploadEnabled"
     :use-session-header-title="useSessionHeaderTitle"
+    :has-webhook="hasWebhook"
     :host-context="hostContext"
     @session-title="(title: string) => emit('session-title', title)"
     @messages-state="(has: boolean) => emit('messages-state', has)"
@@ -40,6 +41,7 @@ defineProps<{
   allowFileUpload?: boolean
   agentImageUploadEnabled?: boolean
   useSessionHeaderTitle?: boolean
+  hasWebhook?: boolean
   hostContext?: Record<string, unknown>
 }>()
 

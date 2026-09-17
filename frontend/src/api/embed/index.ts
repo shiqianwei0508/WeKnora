@@ -44,6 +44,8 @@ export interface EmbedChannelPublicConfig {
   allow_file_upload?: boolean
   agent_web_search_enabled?: boolean
   agent_image_upload_enabled?: boolean
+  /** False when the channel has no webhook URL; relay calls are then pointless. */
+  has_webhook?: boolean
   default_locale?: string
 }
 
@@ -218,19 +220,29 @@ export interface EmbedMessageSuggestionSet {
   questions: EmbedMessageSuggestionItem[]
 }
 
-export async function getEmbedChunkById(channelId: string, token: string, chunkId: string) {
+export async function getEmbedChunkById(
+  channelId: string,
+  token: string,
+  chunkId: string,
+  visitorId?: string,
+) {
   return get<{ success: boolean; data: { content?: string } }>(
     `/api/v1/embed/${channelId}/chunks/${chunkId}`,
-    { headers: { Authorization: `Embed ${token}` } },
+    { headers: embedTokenHeaders(token, visitorId) },
   )
 }
 
-export async function getEmbedSuggestedQuestions(channelId: string, token: string, limit?: number) {
+export async function getEmbedSuggestedQuestions(
+  channelId: string,
+  token: string,
+  limit?: number,
+  visitorId?: string,
+) {
   // Omit limit to let the channel agent's configured starter count apply.
   const qs = typeof limit === 'number' && limit > 0 ? `?limit=${limit}` : ''
   return get<{ success: boolean; data: { questions: SuggestedQuestion[] } }>(
     `/api/v1/embed/${channelId}/suggested-questions${qs}`,
-    { headers: { Authorization: `Embed ${token}` } },
+    { headers: embedTokenHeaders(token, visitorId) },
   )
 }
 
@@ -281,18 +293,18 @@ export async function recordEmbedMessageSuggestionEvent(
   )
 }
 
-export async function getEmbedConfig(channelId: string, token: string) {
+export async function getEmbedConfig(channelId: string, token: string, visitorId?: string) {
   return get<{ success: boolean; data: EmbedChannelPublicConfig }>(
     `/api/v1/embed/${channelId}/config`,
-    { headers: { Authorization: `Embed ${token}` } },
+    { headers: embedTokenHeaders(token, visitorId) },
   )
 }
 
-export async function createEmbedSession(channelId: string, token: string) {
+export async function createEmbedSession(channelId: string, token: string, visitorId?: string) {
   return post<{ success: boolean; data: { id: string; sig: string } }>(
     `/api/v1/embed/${channelId}/sessions`,
     {},
-    { headers: { Authorization: `Embed ${token}` } },
+    { headers: embedTokenHeaders(token, visitorId) },
   )
 }
 
@@ -310,22 +322,27 @@ export async function stopEmbedSession(
   sessionId: string,
   messageId: string,
   sessionSig: string,
+  visitorId?: string,
 ) {
-  const headers: Record<string, string> = {
-    Authorization: `Embed ${token}`,
-    'X-Embed-Session': sessionSig,
-  }
-  return post(`/api/v1/embed/${channelId}/sessions/${sessionId}/stop`, { message_id: messageId }, { headers })
+  return post(
+    `/api/v1/embed/${channelId}/sessions/${sessionId}/stop`,
+    { message_id: messageId },
+    { headers: embedSessionHeaders(token, sessionSig, visitorId) },
+  )
 }
 
-function embedSessionHeaders(token: string, sessionSig: string, visitorId?: string): Record<string, string> {
-  const headers: Record<string, string> = {
-    Authorization: `Embed ${token}`,
-    'X-Embed-Session': sessionSig,
-  }
+function embedTokenHeaders(token: string, visitorId?: string): Record<string, string> {
+  const headers: Record<string, string> = { Authorization: `Embed ${token}` }
   const visitor = visitorId?.trim()
   if (visitor) headers['X-Embed-Visitor'] = visitor
   return headers
+}
+
+function embedSessionHeaders(token: string, sessionSig: string, visitorId?: string): Record<string, string> {
+  return {
+    ...embedTokenHeaders(token, visitorId),
+    'X-Embed-Session': sessionSig,
+  }
 }
 
 export async function resolveEmbedMCPOAuth(
@@ -422,14 +439,16 @@ export async function getEmbedMessageList(
   limit: number,
   beforeTime?: string,
   sig?: string,
+  visitorId?: string,
 ) {
   const params = new URLSearchParams({ limit: String(limit) })
   if (beforeTime) {
     params.set('before_time', beforeTime)
   }
-  const headers: Record<string, string> = { Authorization: `Embed ${token}` }
   // Signed session handle — sent as a header so it never lands in URL/access logs.
-  if (sig) headers['X-Embed-Session'] = sig
+  const headers = sig
+    ? embedSessionHeaders(token, sig, visitorId)
+    : embedTokenHeaders(token, visitorId)
   return get<{ success: boolean; data: unknown[] }>(
     `/api/v1/embed/${channelId}/messages/${sessionId}/load?${params.toString()}`,
     { headers },
@@ -524,15 +543,12 @@ export function relayEmbedWebhookEvent(
   sessionId: string,
   sessionSig: string,
   body: { type: 'message_sent' | 'message_received'; query?: string; content?: string },
+  visitorId?: string,
 ) {
-  const headers: Record<string, string> = {
-    Authorization: `Embed ${token}`,
-    'X-Embed-Session': sessionSig,
-  }
   void post(
     `/api/v1/embed/${channelId}/sessions/${sessionId}/events`,
     { type: body.type, session_id: sessionId, query: body.query, content: body.content },
-    { headers },
+    { headers: embedSessionHeaders(token, sessionSig, visitorId) },
   ).catch(() => {
     // Webhook relay must not block chat.
   })

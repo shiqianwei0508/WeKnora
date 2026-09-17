@@ -31,6 +31,19 @@ const (
 	// embedGlobalMinuteFloor keeps the global per-minute cap usable even when
 	// the per-IP cap is tiny.
 	embedGlobalMinuteFloor = 120
+
+	// embedVisitorKeyMarker separates the per-visitor bucket namespace from the
+	// legacy per-IP namespace inside the same limiter key prefix.
+	embedVisitorKeyMarker = ":v:"
+	// embedEventsKeyMarker moves webhook relay calls onto their own minute
+	// bucket so they cannot starve the per-visitor chat budget.
+	embedEventsKeyMarker = ":events:"
+
+	// embedEventsFullPath is the registered gin route pattern for the webhook
+	// relay endpoint. It is compared against c.FullPath() (the route template,
+	// not the request path) to avoid matching sibling routes such as
+	// /sessions/:session_id/suggestion-events.
+	embedEventsFullPath = "/api/v1/embed/:channel_id/sessions/:session_id/events"
 )
 
 var (
@@ -125,8 +138,16 @@ func EmbedAuth(
 			return
 		}
 
-		// Per-IP per-minute cap.
-		rateKey := fmt.Sprintf("%s:%s", channelID, c.ClientIP())
+		// Per-visitor per-minute cap, falling back to the per-IP cap.
+		//
+		// Reverse proxies collapse every visitor of a channel onto a single
+		// source IP (and deployments behind a trusted proxy may even report the
+		// proxy's own address), so a per-IP bucket throttles the whole channel
+		// at once. When the widget supplies a validated anonymous visitor id we
+		// bill that visitor instead. A missing or invalid header always falls
+		// back to the IP bucket: omitting the header must never buy a bigger or
+		// shared budget.
+		rateKey := embedRateKey(channelID, c)
 		if !limiter.Allow(c.Request.Context(), rateKey, ch.RateLimitPerMinute) {
 			c.JSON(http.StatusTooManyRequests, gin.H{"error": "rate limit exceeded"})
 			c.Abort()
@@ -160,6 +181,16 @@ func EmbedAuth(
 			TenantID: ch.TenantID,
 			IsActive: true,
 		}
+		visitorID := types.EmbedVisitorIDFromContext(c.Request.Context())
+		if visitorID == "" {
+			// ensureEmbedSession stores the visitor id on a cloned request
+			// context that only reaches downstream handlers, so fall back to the
+			// raw header here.
+			visitorID = strings.TrimSpace(c.GetHeader(types.EmbedVisitorHeader))
+			if visitorID != "" {
+				c.Request = c.Request.WithContext(types.WithEmbedVisitorID(c.Request.Context(), visitorID))
+			}
+		}
 		applyAuthSession(c, authSession{
 			User: user,
 			Principal: types.Principal{
@@ -169,10 +200,58 @@ func EmbedAuth(
 			TenantID: ch.TenantID,
 			Tenant:   tenant,
 			Role:     types.TenantRoleViewer,
-			Extra:    map[types.ContextKey]any{types.EmbedChannelContextKey: ch},
+			Extra: map[types.ContextKey]any{
+				types.EmbedChannelContextKey: ch,
+				// Emit a per-visitor principal so downstream features that scope
+				// by caller (e.g. embed OAuth) isolate each anonymous visitor.
+				// Note applyAuthSession later overwrites PrincipalContextKey with
+				// the channel principal, so this only fills the gap for handlers
+				// that read the visitor before that point.
+				types.EmbedVisitorContextKey: visitorID,
+			},
 		})
 		c.Next()
 	}
+}
+
+// embedRateKey resolves the per-caller minute-bucket key for an embed request.
+//
+// The bucket is scoped per visitor when the widget presents a valid
+// X-Embed-Visitor header, and per client IP otherwise. Webhook relay calls
+// (/sessions/:session_id/events) get their own namespace so a channel with no
+// webhook configured cannot spend the chat budget on relay attempts.
+func embedRateKey(channelID string, c *gin.Context) string {
+	scope := fmt.Sprintf("%s:%s", channelID, c.ClientIP())
+	if visitorID, ok := embedVisitorIDFromRequest(c); ok {
+		scope = channelID + embedVisitorKeyMarker + visitorID
+	}
+	if isEmbedEventsRequest(c) {
+		return channelID + embedEventsKeyMarker + scope
+	}
+	return scope
+}
+
+// embedVisitorIDFromRequest returns the caller-supplied anonymous visitor id
+// when it is present and well-formed. Invalid values are ignored (and the
+// caller falls back to the IP bucket) rather than rejected, so a malformed
+// header cannot break an otherwise valid embed request.
+func embedVisitorIDFromRequest(c *gin.Context) (string, bool) {
+	visitorID := strings.TrimSpace(c.GetHeader(types.EmbedVisitorHeader))
+	if visitorID == "" {
+		return "", false
+	}
+	if err := types.ValidateEmbedVisitorID(visitorID); err != nil {
+		return "", false
+	}
+	return visitorID, true
+}
+
+// isEmbedEventsRequest reports whether the current request targets the embed
+// webhook relay endpoint. gin reports the registered route template via
+// FullPath(); comparing the whole template keeps sibling routes such as
+// /sessions/:session_id/suggestion-events out of the events namespace.
+func isEmbedEventsRequest(c *gin.Context) bool {
+	return c.FullPath() == embedEventsFullPath
 }
 
 func extractEmbedToken(c *gin.Context) string {

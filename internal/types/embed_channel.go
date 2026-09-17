@@ -122,8 +122,11 @@ type EmbedChannelPublicConfig struct {
 	// AgentWebSearchEnabled reflects whether the bound agent has web search configured.
 	AgentWebSearchEnabled bool `json:"agent_web_search_enabled"`
 	// AgentImageUploadEnabled reflects whether the bound agent supports image upload.
-	AgentImageUploadEnabled bool   `json:"agent_image_upload_enabled"`
-	DefaultLocale           string `json:"default_locale,omitempty"`
+	AgentImageUploadEnabled bool `json:"agent_image_upload_enabled"`
+	// HasWebhook tells the widget whether the channel has a webhook endpoint.
+	// Without one the relay call is a no-op that still spends rate-limit quota.
+	HasWebhook    bool   `json:"has_webhook"`
+	DefaultLocale string `json:"default_locale,omitempty"`
 }
 
 // Supported embed UI locales.

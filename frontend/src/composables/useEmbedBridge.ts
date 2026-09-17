@@ -69,9 +69,10 @@ async function isStoredSessionValid(
   channelId: string,
   apiToken: string,
   session: StoredSession,
+  visitorId?: string,
 ): Promise<boolean> {
   try {
-    await getEmbedMessageList(channelId, apiToken, session.id, 1, undefined, session.sig)
+    await getEmbedMessageList(channelId, apiToken, session.id, 1, undefined, session.sig, visitorId)
     return true
   } catch {
     return false
@@ -137,7 +138,7 @@ export function useEmbedBridge(channelId: Ref<string>) {
         }
       }
 
-      const res = await getEmbedConfig(id, apiToken)
+      const res = await getEmbedConfig(id, apiToken, visitorId.value)
       if (!res?.success || !res.data) {
         loadError.value = t('embedPublish.invalidChannel')
         return
@@ -154,10 +155,10 @@ export function useEmbedBridge(channelId: Ref<string>) {
       let resolved: StoredSession | null = null
       const stored = readStoredSession(id)
       const agentMatches = !stored?.agentId || !configAgentId || stored.agentId === configAgentId
-      if (stored && agentMatches && (await isStoredSessionValid(id, apiToken, stored))) {
+      if (stored && agentMatches && (await isStoredSessionValid(id, apiToken, stored, visitorId.value))) {
         resolved = { ...stored, agentId: configAgentId || stored.agentId }
       } else {
-        const sessionRes = await createEmbedSession(id, apiToken)
+        const sessionRes = await createEmbedSession(id, apiToken, visitorId.value)
         const newId = sessionRes?.data?.id || ''
         if (newId) {
           resolved = { id: newId, sig: sessionRes?.data?.sig || '', agentId: configAgentId }
@@ -194,7 +195,7 @@ export function useEmbedBridge(channelId: Ref<string>) {
     const apiToken = token.value
     if (!id || !apiToken) return
     try {
-      const sessionRes = await createEmbedSession(id, apiToken)
+      const sessionRes = await createEmbedSession(id, apiToken, visitorId.value)
       const newId = sessionRes?.data?.id || ''
       if (!newId) return
       const agentId = String(config.value?.agent_id || '').trim()

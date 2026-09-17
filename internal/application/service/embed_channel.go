@@ -261,6 +261,7 @@ func (s *embedChannelService) PublicConfig(ctx context.Context, ch *types.EmbedC
 		AllowFileUpload:         ch.AllowFileUpload,
 		AgentWebSearchEnabled:   agentWebSearchEnabled,
 		AgentImageUploadEnabled: agentImageUploadEnabled,
+		HasWebhook:              strings.TrimSpace(ch.WebhookURL) != "",
 		DefaultLocale:           types.NormalizeEmbedDefaultLocale(ch.DefaultLocale),
 	}
 }

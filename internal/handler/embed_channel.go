@@ -329,6 +329,7 @@ func (h *EmbedChannelHandler) GetEmbedConfig(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
+	attachEmbedVisitorContext(c)
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": h.embedSvc.PublicConfig(c.Request.Context(), ch)})
 }
 
@@ -338,6 +339,7 @@ func (h *EmbedChannelHandler) GetEmbedChunk(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
+	attachEmbedVisitorContext(c)
 	chunkID := secutils.SanitizeForLog(c.Param("chunk_id"))
 	if chunkID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "chunk_id is required"})
@@ -365,6 +367,7 @@ func (h *EmbedChannelHandler) GetEmbedSuggestedQuestions(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
+	attachEmbedVisitorContext(c)
 	if !ch.ShowSuggestedQuestions {
 		c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"questions": []types.SuggestedQuestion{}}})
 		return
@@ -556,6 +559,13 @@ func (h *EmbedChannelHandler) EmbedRelayWebhookEvent(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
+	// Without a webhook URL there is nothing to dispatch. The widget skips this
+	// call once it sees has_webhook=false, but older widgets still send it —
+	// acknowledge without touching the session or the rate-limit budget.
+	if strings.TrimSpace(ch.WebhookURL) == "" {
+		c.JSON(http.StatusOK, gin.H{"success": true})
+		return
+	}
 	if err := h.ensureEmbedSession(c); err != nil {
 		return
 	}
@@ -614,6 +624,19 @@ func (h *EmbedChannelHandler) delegateEmbedChat(c *gin.Context, agentMode bool) 
 		return
 	}
 	h.sessionHandler.KnowledgeQA(c)
+}
+
+// attachEmbedVisitorContext records a validated X-Embed-Visitor header on the
+// request context for embed handlers that do not go through ensureEmbedSession
+// (config / chunk / suggested questions). A malformed header is ignored so the
+// read-only paths keep working; the per-visitor rate-limit bucket is resolved
+// independently in middleware.EmbedAuth.
+func attachEmbedVisitorContext(c *gin.Context) {
+	visitorID := strings.TrimSpace(c.GetHeader(types.EmbedVisitorHeader))
+	if visitorID == "" || types.ValidateEmbedVisitorID(visitorID) != nil {
+		return
+	}
+	c.Request = c.Request.WithContext(types.WithEmbedVisitorID(c.Request.Context(), visitorID))
 }
 
 func (h *EmbedChannelHandler) ensureEmbedSession(c *gin.Context) error {

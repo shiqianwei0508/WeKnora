@@ -123,6 +123,7 @@ const parentMd = ref<HTMLElement | null>(null)
 
 const embedChannelIdRef = computed(() => props.embedChannelId)
 const embedTokenRef = computed(() => props.embedToken)
+const embedVisitorIdRef = computed(() => props.embedVisitorId || '')
 
 const { float: citationFloat, rebind: rebindCitations } = useEmbedCitationPopover(
   parentMd,
@@ -130,6 +131,7 @@ const { float: citationFloat, rebind: rebindCitations } = useEmbedCitationPopove
   embedTokenRef,
   {
     getKnowledgeReferences: () => props.session?.knowledge_references,
+    visitorId: embedVisitorIdRef,
   },
 )
 
